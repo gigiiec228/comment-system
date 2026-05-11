@@ -90,7 +90,7 @@
                         <textarea id="content-input" required placeholder="在這裡寫下你的吐槽..." class="w-full h-32 bg-zinc-800/50 border border-zinc-700 rounded-2xl p-4 text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50 transition-colors resize-none"></textarea>
                     </div>
 
-                    <button type="submit" class="w-full bg-orange-600 hover:bg-orange-500 text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98]">
+                    <button type="submit" id="submit-btn" class="w-full bg-orange-600 hover:bg-orange-500 text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-60">
                         <i data-lucide="send" class="w-5 h-5"></i>
                         <span>發布</span>
                     </button>
@@ -109,16 +109,29 @@
         // Google Sheets 同步輔助函式
         // ============================
         async function syncToSheet(payload) {
-            if (APPS_SCRIPT_URL.includes("PASTE")) return;
+            if (APPS_SCRIPT_URL.includes("PASTE")) return null;
             try {
-                await fetch(APPS_SCRIPT_URL, {
+                const res = await fetch(APPS_SCRIPT_URL, {
                     method: "POST",
                     headers: { "Content-Type": "text/plain" },
                     body: JSON.stringify(payload)
                 });
+                return await res.json();
             } catch (e) {
                 console.warn("同步至 Google Sheet 失敗", e);
+                return null;
             }
+        }
+
+        function normalizeRecord(record) {
+            return {
+                id: record.id || record.ID || "",
+                createdAt: record.createdAt || record.CreatedAt || "",
+                content: record.content || record.Content || "",
+                category: record.category || record.Category || "其他",
+                likes: Number(record.likes !== undefined ? record.likes : (record.Likes || 0)),
+                status: record.status || record.Status || "active"
+            };
         }
 
         // 從 Sheet 讀取所有記錄（用 GET）
@@ -127,7 +140,7 @@
             try {
                 const res = await fetch(APPS_SCRIPT_URL);
                 const data = await res.json();
-                return Array.isArray(data.records) ? data.records : null;
+                return Array.isArray(data.records) ? data.records.map(normalizeRecord) : null;
             } catch (e) {
                 console.warn("從 Sheet 讀取失敗", e);
                 return null;
@@ -147,28 +160,26 @@
                 return remote;
             }
             const data = localStorage.getItem("records");
-            return data ? JSON.parse(data) : [];
+            return data ? JSON.parse(data).map(normalizeRecord) : [];
         }
 
         async function saveData(newRecord) {
             const records = await loadData();
             records.push(newRecord);
             localStorage.setItem("records", JSON.stringify(records));
-            syncToSheet({ action: "create", record: newRecord });
-            await renderList();
+            await renderList(records);
+            await syncToSheet({ action: "create", record: newRecord });
         }
 
-        async function renderList() {
-            const records = await loadData();
+        async function renderList(recordsOverride) {
+            const records = (recordsOverride || await loadData()).map(normalizeRecord);
             const listContainer = document.getElementById('list-container');
             const emptyState = document.getElementById('empty-state');
             
-            // Filtering
-            const filtered = currentFilter === '全部' 
-                ? records 
+            const filtered = currentFilter === '全部'
+                ? records
                 : records.filter(r => r.category === currentFilter);
             
-            // Sorting (latest first)
             filtered.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
             listContainer.innerHTML = '';
@@ -186,27 +197,37 @@
             lucide.createIcons();
         }
 
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
         // UI Helpers
         function createCard(record) {
             const div = document.createElement('div');
             div.className = 'break-inside-avoid animate-in fade-in slide-in-from-bottom-4 duration-300';
             
             const categoryClass = getCategoryStyles(record.category);
-            const date = new Date(record.createdAt).toLocaleDateString();
+            const date = record.createdAt ? new Date(record.createdAt).toLocaleDateString() : "";
+            const safeId = String(record.id).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 
             div.innerHTML = `
                 <div class="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5 hover:border-zinc-700 transition-colors mb-4">
                     <div class="flex justify-between items-start mb-3">
                         <span class="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-md ${categoryClass}">
-                            ${record.category}
+                            ${escapeHtml(record.category)}
                         </span>
                         <span class="text-zinc-500 text-[10px] font-mono">
-                            ${date}
+                            ${escapeHtml(date)}
                         </span>
                     </div>
-                    <p class="text-zinc-200 leading-relaxed mb-6 whitespace-pre-wrap">${record.content}</p>
+                    <p class="text-zinc-200 leading-relaxed mb-6 whitespace-pre-wrap">${escapeHtml(record.content)}</p>
                     <div class="flex items-center justify-between">
-                        <button onclick="handleLike('${record.id}')" class="flex items-center gap-2 text-zinc-400 hover:text-orange-500 transition-colors group/btn">
+                        <button onclick="handleLike('${safeId}')" class="flex items-center gap-2 text-zinc-400 hover:text-orange-500 transition-colors group/btn">
                             <div class="p-2 rounded-full hover:bg-orange-500/10 transition-colors">
                                 <i data-lucide="thumbs-up" class="w-4 h-4"></i>
                             </div>
@@ -270,16 +291,19 @@
             if (index !== -1) {
                 records[index].likes = (records[index].likes || 0) + 1;
                 localStorage.setItem("records", JSON.stringify(records));
-                syncToSheet({ action: "update", id: id, changes: { likes: records[index].likes } });
-                await renderList();
+                await renderList(records);
+                await syncToSheet({ action: "update", id: id, changes: { likes: records[index].likes } });
             }
         }
 
         // Form Submit
-        document.getElementById('complaint-form').onsubmit = (e) => {
+        document.getElementById('complaint-form').onsubmit = async (e) => {
             e.preventDefault();
             const content = document.getElementById('content-input').value.trim();
             if (!content) return;
+
+            const submitBtn = document.getElementById('submit-btn');
+            submitBtn.disabled = true;
 
             const newRecord = {
                 id: Date.now() + "_" + Math.random().toString(36).slice(2,6),
@@ -290,8 +314,12 @@
                 status: "active"
             };
 
-            saveData(newRecord);
-            closeModal();
+            try {
+                closeModal();
+                await saveData(newRecord);
+            } finally {
+                submitBtn.disabled = false;
+            }
         };
 
         // ============================
