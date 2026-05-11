@@ -24,10 +24,16 @@
                 </div>
                 <h1 class="text-xl font-bold tracking-tight">班級吐槽牆</h1>
             </div>
-            <button onclick="openModal()" class="flex items-center gap-2 bg-zinc-100 text-zinc-900 px-4 py-2 rounded-full font-medium hover:bg-white transition-colors active:scale-95">
-                <i data-lucide="plus" class="w-4 h-4"></i>
-                <span>我要吐槽</span>
-            </button>
+            <div class="flex items-center gap-2">
+                <button onclick="handleAISummary()" id="aiBtn" class="flex items-center gap-2 bg-zinc-800 text-zinc-100 px-4 py-2 rounded-full font-medium hover:bg-zinc-700 transition-colors active:scale-95 border border-zinc-700 disabled:opacity-50">
+                    <i data-lucide="sparkles" class="w-4 h-4"></i>
+                    <span id="aiBtnText">AI 摘要</span>
+                </button>
+                <button onclick="openModal()" class="flex items-center gap-2 bg-zinc-100 text-zinc-900 px-4 py-2 rounded-full font-medium hover:bg-white transition-colors active:scale-95">
+                    <i data-lucide="plus" class="w-4 h-4"></i>
+                    <span>我要吐槽</span>
+                </button>
+            </div>
         </div>
 
         <!-- Filters -->
@@ -97,7 +103,7 @@
         // ============================
         // 設定區：請貼上你的 Apps Script 部署 URL
         // ============================
-        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwJyF3Xce57F8PSke6nDPG-eclSyvUOkLLIq05xlfWQguave7DOP7JLBRCf5GVaD5pr/exec";
+        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxLIFp9myw-B_m-7xccQDHpAGJ8fSgbaX-C6l2mJPvEPfje25Xav7zNTwmlhD36psXm/exec";
 
         // ============================
         // Google Sheets 同步輔助函式
@@ -115,20 +121,13 @@
             }
         }
 
-        // 從 Sheet 讀取所有記錄（用 POST 模擬）
+        // 從 Sheet 讀取所有記錄（用 GET）
         async function fetchRecordsFromSheet() {
             if (APPS_SCRIPT_URL.includes("PASTE")) return null;
             try {
-                const response = await fetch(APPS_SCRIPT_URL, {
-                    method: "POST",
-                    headers: { "Content-Type": "text/plain" },
-                    body: JSON.stringify({ action: "read" })
-                });
-                const data = await response.json();
-                if (Array.isArray(data)) {
-                    return data;
-                }
-                return null;
+                const res = await fetch(APPS_SCRIPT_URL);
+                const data = await res.json();
+                return Array.isArray(data.records) ? data.records : null;
             } catch (e) {
                 console.warn("從 Sheet 讀取失敗", e);
                 return null;
@@ -141,21 +140,26 @@
         let currentFilter = '全部';
         let currentSelectedCategory = '學校';
 
-        function loadData() {
+        async function loadData() {
+            const remote = await fetchRecordsFromSheet();
+            if (remote) {
+                localStorage.setItem("records", JSON.stringify(remote));
+                return remote;
+            }
             const data = localStorage.getItem("records");
             return data ? JSON.parse(data) : [];
         }
 
-        function saveData(newRecord) {
-            const records = loadData();
+        async function saveData(newRecord) {
+            const records = await loadData();
             records.push(newRecord);
             localStorage.setItem("records", JSON.stringify(records));
             syncToSheet({ action: "create", record: newRecord });
-            renderList();
+            await renderList();
         }
 
-        function renderList() {
-            const records = loadData();
+        async function renderList() {
+            const records = await loadData();
             const listContainer = document.getElementById('list-container');
             const emptyState = document.getElementById('empty-state');
             
@@ -248,7 +252,7 @@
             });
         }
 
-        function setFilter(cat) {
+        async function setFilter(cat) {
             currentFilter = cat;
             document.querySelectorAll('.filter-btn').forEach(btn => {
                 if (btn.dataset.category === cat) {
@@ -257,17 +261,17 @@
                     btn.className = 'filter-btn px-4 py-1.5 rounded-full text-sm font-medium border bg-transparent border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300';
                 }
             });
-            renderList();
+            await renderList();
         }
 
-        function handleLike(id) {
-            const records = loadData();
+        async function handleLike(id) {
+            const records = await loadData();
             const index = records.findIndex(r => r.id === id);
             if (index !== -1) {
                 records[index].likes = (records[index].likes || 0) + 1;
                 localStorage.setItem("records", JSON.stringify(records));
                 syncToSheet({ action: "update", id: id, changes: { likes: records[index].likes } });
-                renderList();
+                await renderList();
             }
         }
 
@@ -291,17 +295,45 @@
         };
 
         // ============================
-        // 初始化：先從 Sheet 同步，再渲染 UI
+        // AI 摘要功能
+        // ============================
+        async function askAI(userPrompt) {
+            const res = await fetch(APPS_SCRIPT_URL, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify({ action: "askAI", prompt: userPrompt })
+            });
+            const data = await res.json();
+            return data.result || data.error || "AI 冇回應";
+        }
+
+        async function handleAISummary() {
+            const btn = document.getElementById('aiBtn');
+            const text = document.getElementById('aiBtnText');
+            btn.disabled = true;
+            text.textContent = '思考中...';
+            try {
+                const records = await loadData();
+                if (records.length === 0) { alert('未有吐槽資料可以摘要'); return; }
+                const summaryInput = records.slice(0, 30).map(r =>
+                    `[${r.category}] ${r.content}`
+                ).join('\n');
+                const prompt = '以下是班級吐槽牆嘅留言。請用繁體中文，用 3-5 句概括同學最關心嘅問題、情緒同有冇明顯 patterns:\n\n' + summaryInput;
+                const result = await askAI(prompt);
+                alert(result);
+            } catch (e) {
+                alert('AI 出錯：' + e.message);
+            } finally {
+                btn.disabled = false;
+                text.textContent = 'AI 摘要';
+            }
+        }
+
+        // ============================
+        // 初始化：渲染 UI
         // ============================
         window.onload = async () => {
-            // 嘗試從 Google Sheet 抓取最新資料並更新 localStorage
-            const remoteRecords = await fetchRecordsFromSheet();
-            if (remoteRecords) {
-                // 簡單合併策略：以遠端為準，覆蓋本地（因為遠端是統一的資料源）
-                localStorage.setItem("records", JSON.stringify(remoteRecords));
-            }
-            // 渲染畫面（使用 localStorage 中的資料）
-            renderList();
+            await renderList();
             lucide.createIcons();
         };
     </script>
