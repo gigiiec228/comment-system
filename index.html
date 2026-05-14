@@ -75,7 +75,7 @@
             </div>
             <div class="text-right hidden sm:block">
                 <p class="text-sm font-bold">👋 你好，美食家！</p>
-                <p class="text-[10px] opacity-40 uppercase font-black">Local Storage Mode</p>
+                <p class="text-[10px] opacity-40 uppercase font-black">Local Storage + Google Sheet 雙重同步</p>
             </div>
         </header>
 
@@ -145,30 +145,55 @@
         </main>
 
         <footer class="mt-12 text-center opacity-40 font-bold text-sm">
-            <p>🍱 Campus Foodies • Static HTML Edition • 2024</p>
+            <p>🍱 Campus Foodies • Static HTML + Google Sheet • 2024</p>
         </footer>
     </div>
 
     <!-- JavaScript 邏輯 -->
     <script>
-        // ========== 請貼上你的 Apps Script 部署網址 ==========
-        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyYVWWlO6iPAO8tGW5qR10ziHL92Hoy0Rc-DV0yQOcNc3dGYs2HnVP0r2iShzdEX5pHyA/exec";
+        // ==================== 設定區 ====================
+        // 🔻 請將下方 URL 替換為你部署 Google Apps Script 後獲得的 Web App 網址
+        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzuP1LQ-DhkoKyfHuB7WOuYrRQDG77APsa9yFghXurU9PGCcD7dV4U0Kbge0BGag8Y/exec";
 
-        // ========== 同步至 Google Sheet 的輔助函數 ==========
-        function syncToSheet(payload) {
-            // 若未替換為真實網址則略過
-            if (APPS_SCRIPT_URL === "PASTE_YOUR_APPS_SCRIPT_URL_HERE") {
-                console.warn("尚未設定 Apps Script URL，略過雲端同步");
+        // ==================== Google Sheet 同步 Helper ====================
+        async function syncToSheet(payload) {
+            if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL === "PASTE_YOUR_APPS_SCRIPT_URL_HERE") {
+                console.warn("尚未設定 APPS_SCRIPT_URL，跳過同步至 Google Sheet");
                 return;
             }
-            fetch(APPS_SCRIPT_URL, {
-                method: "POST",
-                headers: { "Content-Type": "text/plain" },
-                body: JSON.stringify(payload)
-            })
-            .then(res => res.json())
-            .then(data => console.log("☁️ 同步成功", data))
-            .catch(err => console.warn("⚠️ 同步失敗", err));
+            try {
+                const response = await fetch(APPS_SCRIPT_URL, {
+                    method: "POST",
+                    headers: { "Content-Type": "text/plain" },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (result.status !== "created" && result.status !== "updated" && result.status !== "deleted") {
+                    console.warn("Google Sheet 同步回應異常:", result);
+                }
+            } catch (err) {
+                console.warn("同步至 Google Sheet 失敗 (不影響本機操作):", err);
+            }
+        }
+
+        // 從 Google Sheet 拉取所有資料，並覆蓋 localStorage (做為初始同步)
+        async function fetchFromSheetAndSyncLocal() {
+            if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL === "PASTE_YOUR_APPS_SCRIPT_URL_HERE") {
+                console.log("未設定 Google Sheet URL，僅使用 localStorage");
+                return false;
+            }
+            try {
+                const response = await fetch(APPS_SCRIPT_URL);
+                const data = await response.json();
+                if (data.records && Array.isArray(data.records)) {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(data.records));
+                    return true;
+                }
+                return false;
+            } catch (err) {
+                console.warn("從 Google Sheet 拉取資料失敗，繼續使用 localStorage:", err);
+                return false;
+            }
         }
 
         // 初始化 Lucide 圖標
@@ -178,7 +203,7 @@
         let currentRating = 5;
         const STORAGE_KEY = "records";
 
-        // === 功能型 Function ===
+        // === 功能型 Function (保留原樣，無需更動核心邏輯) ===
 
         // 1. 載入資料
         function loadData() {
@@ -186,14 +211,12 @@
             return rawData ? JSON.parse(rawData) : [];
         }
 
-        // 2. 儲存資料（並同步至 Sheet）
+        // 2. 儲存資料 (僅本機)
         function saveData(newRecord) {
             const records = loadData();
-            records.unshift(newRecord); // 新的排在最前面
+            records.unshift(newRecord);
             localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
             renderList();
-            // 👉 新增：同步至 Google Sheet
-            syncToSheet({ action: "create", record: newRecord });
         }
 
         // 3. 渲染列表與功能
@@ -226,12 +249,12 @@
                         
                         <div class="flex flex-col mb-2">
                             <span class="text-xs font-bold text-yellow-600 mb-1">${'⭐'.repeat(record.rating)}</span>
-                            <h3 class="font-black text-lg leading-tight uppercase">${record.foodName}</h3>
-                            <p class="text-[10px] opacity-60 font-bold">${record.restaurantName}</p>
+                            <h3 class="font-black text-lg leading-tight uppercase">${escapeHtml(record.foodName)}</h3>
+                            <p class="text-[10px] opacity-60 font-bold">${escapeHtml(record.restaurantName)}</p>
                         </div>
 
                         <p class="text-sm text-gray-600 mt-2 line-clamp-2 italic h-[40px]">
-                            "${record.comment || '無評論內容'}"
+                            "${escapeHtml(record.comment || '無評論內容')}"
                         </p>
 
                         <div class="mt-4">
@@ -248,24 +271,37 @@
             renderLeaderboard(records);
         }
 
-        // 輔助功能：切換狀態（並同步至 Sheet）
-        function toggleStatus(id) {
+        // 簡單防 XSS
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/[&<>]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                return m;
+            }).replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, function(c) {
+                return c;
+            });
+        }
+
+        // 輔助功能：切換狀態 (修改同步)
+        window.toggleStatus = async function(id) {
             let records = loadData();
+            let updatedRecord = null;
             let newStatus = null;
             records = records.map(r => {
                 if (r.id === id) {
                     newStatus = r.status === 'active' ? 'done' : 'active';
-                    return { ...r, status: newStatus };
+                    updatedRecord = { ...r, status: newStatus };
+                    return updatedRecord;
                 }
                 return r;
             });
             localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
             renderList();
-            // 👉 新增：同步狀態變更至 Sheet
-            if (newStatus) {
-                syncToSheet({ action: "update", id: id, changes: { status: newStatus } });
-            }
-        }
+            // 同步至 Google Sheet
+            await syncToSheet({ action: "update", id: id, changes: { status: newStatus } });
+        };
 
         // 輔助功能：計算排行榜
         function renderLeaderboard(records) {
@@ -292,8 +328,8 @@
                             ${idx + 1}
                         </div>
                         <div class="flex-1 min-w-0">
-                            <div class="font-black truncate text-sm">${item.name}</div>
-                            <div class="text-[10px] opacity-60 truncate">${item.loc}</div>
+                            <div class="font-black truncate text-sm">${escapeHtml(item.name)}</div>
+                            <div class="text-[10px] opacity-60 truncate">${escapeHtml(item.loc)}</div>
                         </div>
                         <div class="font-black text-sm whitespace-nowrap">
                             ${item.avg.toFixed(1)} ⭐
@@ -330,8 +366,8 @@
             }
         };
 
-        // --- 表單提交處理 ---
-        document.getElementById('reviewForm').addEventListener('submit', (e) => {
+        // --- 表單提交處理 (新增 + 同步) ---
+        document.getElementById('reviewForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
             const newRecord = {
@@ -344,16 +380,25 @@
                 status: "active"
             };
 
+            // 先儲存至本機 (保持原有 UX)
             saveData(newRecord);
+            
+            // 非同步同步至 Google Sheet (不阻塞 UI)
+            syncToSheet({ action: "create", record: newRecord });
             
             // 重置表單
             e.target.reset();
             setStar(5);
         });
 
-        // 初始執行
-        setupStars();
-        renderList();
+        // ========== 初始化流程：先從 Google Sheet 拉取，再啟動畫面 ==========
+        async function init() {
+            await fetchFromSheetAndSyncLocal();   // 嘗試從雲端取得最新資料並更新 localStorage
+            setupStars();                         // 建立星星元件
+            renderList();                         // 渲染畫面 (此時會讀取已更新的 localStorage)
+        }
+
+        init();
     </script>
 </body>
 </html>
