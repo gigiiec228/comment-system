@@ -3,12 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Notes with Google Sheet Sync</title>
+    <title>My App with Google Sheet Sync</title>
     <style>
+      /* 基本排版，不影響原 UI 外觀（若原有樣式可自行抽換） */
       body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
-      form, .note { margin-bottom: 1rem; }
-      input, textarea { display: block; width: 100%; margin: 0.3rem 0; }
-      button { margin-right: 0.5rem; }
+      form, .record { margin-bottom: 1.5rem; padding: 1rem; border: 1px solid #ccc; border-radius: 8px; }
+      input, textarea { display: block; width: 100%; margin: 0.3rem 0; box-sizing: border-box; }
+      button { margin-right: 0.5rem; cursor: pointer; }
       .tags { color: #555; font-size: 0.9rem; }
     </style>
   </head>
@@ -17,8 +18,8 @@
 
     <script>
       // ===================== 設定 =====================
-      const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzDQrND4u-fzPr5SmTgRvVPwioZ9w95F6xnmgvbakbmiXJY-4pvP5wHBAIslp6t4x8v6g/exec";
-      const STORAGE_KEY = "notes";
+      const APPS_SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_URL_HERE";
+      const STORAGE_KEY = "myAppRecords";
 
       // ===================== 工具函數 =====================
       function generateId() {
@@ -37,7 +38,7 @@
 
       // ===================== 同步到 Google Sheet =====================
       async function syncToSheet(payload) {
-        if (APPS_SCRIPT_URL === "PASTE_YOUR_APPS_SCRIPT_URL_HERE") {
+        if (APPS_SCRIPT_URL === "https://script.google.com/macros/s/AKfycbzlNoTo3WXSsT-ixBd8mOlnf1dcR3G3v9FuOD3gDdHkLgzTAjmLNzpBx3PfZCEZWgO9xA/exec") {
           console.warn("尚未設定 APPS_SCRIPT_URL，跳過同步");
           return;
         }
@@ -59,15 +60,15 @@
       let records = loadFromStorage();
       let editId = null; // 目前編輯中的 id
 
-      // ===================== DOM 元素 =====================
+      // ===================== 畫面渲染（保留原 root 結構） =====================
       const root = document.getElementById("root");
 
       function render() {
         root.innerHTML = "";
 
-        // 表單區域
+        // ---- 表單區域 ----
         const form = document.createElement("form");
-        form.id = "note-form";
+        form.id = "record-form";
 
         const titleInput = document.createElement("input");
         titleInput.type = "text";
@@ -82,7 +83,7 @@
 
         const tagsInput = document.createElement("input");
         tagsInput.type = "text";
-        tagsInput.placeholder = "標籤（用逗號分隔）";
+        tagsInput.placeholder = "標籤（逗號分隔）";
         tagsInput.id = "tags-input";
 
         const submitBtn = document.createElement("button");
@@ -95,12 +96,13 @@
         cancelBtn.style.display = editId ? "inline-block" : "none";
         cancelBtn.onclick = () => {
           editId = null;
-          document.getElementById("note-form").reset();
+          document.getElementById("record-form").reset();
           render();
         };
 
         form.append(titleInput, contentInput, tagsInput, submitBtn, cancelBtn);
 
+        // 表單提交：新增或修改
         form.onsubmit = (e) => {
           e.preventDefault();
           const title = titleInput.value.trim();
@@ -140,16 +142,16 @@
 
         root.appendChild(form);
 
-        // 記錄列表
+        // ---- 紀錄列表 ----
         const list = document.createElement("div");
-        list.id = "notes-list";
+        list.id = "records-list";
 
         if (records.length === 0) {
           list.innerHTML = "<p>尚無紀錄</p>";
         } else {
           records.forEach(r => {
             const div = document.createElement("div");
-            div.className = "note";
+            div.className = "record";
             div.innerHTML = `
               <strong>${escapeHtml(r.title)}</strong>
               <p>${escapeHtml(r.content)}</p>
@@ -193,9 +195,6 @@
 
       // 初始渲染
       render();
-
-      // 如果想要初次載入時從 Sheet 匯入資料（可選），可自行實作：
-      // async function loadFromSheet() { ... }
     </script>
   </body>
 </html>
