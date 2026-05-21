@@ -73,9 +73,16 @@
                 </div>
                 <h1 class="text-3xl font-[900] tracking-tight">校園美食大搜查</h1>
             </div>
-            <div class="text-right hidden sm:block">
-                <p class="text-sm font-bold">👋 你好，美食家！</p>
-                <p class="text-[10px] opacity-40 uppercase font-black">Local Storage + Google Sheet 雙重同步</p>
+            <!-- 右側：原有文字 + AI 摘要按鈕 -->
+            <div class="flex flex-col items-end">
+                <div class="text-right hidden sm:block">
+                    <p class="text-sm font-bold">👋 你好，美食家！</p>
+                    <p class="text-[10px] opacity-40 uppercase font-black">Local Storage + Google Sheet 雙重同步</p>
+                </div>
+                <button onclick="handleAISummary()" id="aiBtn" class="mt-2 bento-button px-3 py-1 text-sm bg-white flex items-center gap-1">
+                    <i data-lucide="sparkles" class="w-4 h-4"></i>
+                    <span id="aiBtnText">AI 摘要</span>
+                </button>
             </div>
         </header>
 
@@ -125,30 +132,11 @@
                 </section>
             </div>
 
-            <!-- Right Column: Stats + AI 小幫手 -->
-            <div class="flex flex-col gap-6">
-                <div class="bento-card bg-[#E1F5FE] flex flex-col items-center justify-center text-center">
-                    <p class="text-sm font-bold opacity-70 mb-1">已累計收錄評價</p>
-                    <p class="text-6xl font-black" id="totalCount">0</p>
-                    <p class="text-sm font-bold opacity-70 mt-1">條真實回饋</p>
-                </div>
-
-                <!-- 🔮 AI 美食顧問 -->
-                <div class="bento-card bg-[#F3E5F5] flex flex-col">
-                    <h2 class="text-lg font-black mb-3 flex items-center gap-2">
-                        <span>🤖</span> AI 美食顧問
-                    </h2>
-                    <div id="aiChatBox" class="bg-white/60 rounded-xl p-3 border-2 border-[#5D4037] mb-3 h-32 overflow-y-auto text-sm space-y-2">
-                        <div class="text-xs opacity-60 italic">問我任何美食建議、搭配靈感或食評整理～</div>
-                    </div>
-                    <div class="flex gap-2">
-                        <input type="text" id="aiPromptInput" placeholder="例如：推薦一間適合聚餐的店..." 
-                               class="flex-1 p-2 border-2 border-[#5D4037] rounded-xl text-sm outline-none focus:ring-2 ring-[#FFAB91]">
-                        <button id="aiSendBtn" class="bento-button px-4 py-2 text-sm bg-white flex items-center gap-1">
-                            <i data-lucide="send" class="w-4 h-4"></i>
-                        </button>
-                    </div>
-                </div>
+            <!-- Right Column: Stats -->
+            <div class="bento-card bg-[#E1F5FE] flex flex-col items-center justify-center text-center">
+                <p class="text-sm font-bold opacity-70 mb-1">已累計收錄評價</p>
+                <p class="text-6xl font-black" id="totalCount">0</p>
+                <p class="text-sm font-bold opacity-70 mt-1">條真實回饋</p>
             </div>
 
             <!-- Bottom Row: Recent Feed -->
@@ -174,30 +162,9 @@
         // 🔻 請將下方 URL 替換為你部署 Google Apps Script 後獲得的 Web App 網址
         const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyOztS-0IzrjYKtuTSkWCGQ69yn2RMsTK8Bmru3nKrjOcuPbMN3z5F8G_96FtSmMfZJ/exec";
 
-        // ==================== 欄位正規化：相容大小寫 ====================
-        function normalizeRecord(record) {
-            // 支援大小寫與舊版欄位對照，統一轉成小寫 camelCase
-            const normalized = {};
-            // id
-            normalized.id = record.id || record.ID || '';
-            // createdAt
-            normalized.createdAt = record.createdAt || record.CreatedAt || record.Createdat || '';
-            // foodName
-            normalized.foodName = record.foodName || record.FoodName || record.foodname || record.content || record.Content || '';
-            // restaurantName
-            normalized.restaurantName = record.restaurantName || record.RestaurantName || record.restaurantname || record.category || record.Category || '';
-            // rating
-            normalized.rating = record.rating !== undefined ? record.rating : (record.Rating !== undefined ? record.Rating : (record.likes !== undefined ? record.likes : (record.Likes !== undefined ? record.Likes : 0)));
-            // comment
-            normalized.comment = record.comment || record.Comment || '';
-            // status
-            normalized.status = record.status || record.Status || 'active';
-            return normalized;
-        }
-
         // ==================== Google Sheet 同步 Helper ====================
         async function syncToSheet(payload) {
-            if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL === "PASTE_YOUR_APPS_SCRIPT_URL_HERE") {
+            if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL === "https://script.google.com/macros/s/AKfycbyOztS-0IzrjYKtuTSkWCGQ69yn2RMsTK8Bmru3nKrjOcuPbMN3z5F8G_96FtSmMfZJ/exec") {
                 console.warn("尚未設定 APPS_SCRIPT_URL，跳過同步至 Google Sheet");
                 return;
             }
@@ -216,7 +183,7 @@
             }
         }
 
-        // 從 Google Sheet 拉取所有資料，並覆蓋 localStorage (做為初始同步)，但先經過正規化
+        // 從 Google Sheet 拉取所有資料，並覆蓋 localStorage (做為初始同步)
         async function fetchFromSheetAndSyncLocal() {
             if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL === "PASTE_YOUR_APPS_SCRIPT_URL_HERE") {
                 console.log("未設定 Google Sheet URL，僅使用 localStorage");
@@ -226,40 +193,13 @@
                 const response = await fetch(APPS_SCRIPT_URL);
                 const data = await response.json();
                 if (data.records && Array.isArray(data.records)) {
-                    // 正規化所有紀錄後再存入 localStorage
-                    const normalizedRecords = data.records.map(normalizeRecord);
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizedRecords));
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(data.records));
                     return true;
                 }
                 return false;
             } catch (err) {
                 console.warn("從 Google Sheet 拉取資料失敗，繼續使用 localStorage:", err);
                 return false;
-            }
-        }
-
-        // ==================== AI 對話功能 ====================
-        async function askAI(prompt) {
-            if (!APPS_SCRIPT_URL) {
-                return "❌ 尚未設定後端網址";
-            }
-            try {
-                const response = await fetch(APPS_SCRIPT_URL, {
-                    method: "POST",
-                    headers: { "Content-Type": "text/plain" },
-                    body: JSON.stringify({ action: "askAI", prompt: prompt })
-                });
-                const data = await response.json();
-                if (data.result) {
-                    return data.result;
-                } else if (data.error) {
-                    return `⚠️ ${data.error}`;
-                } else {
-                    return "🤔 AI 沒有回覆，請稍後再試";
-                }
-            } catch (err) {
-                console.warn("AI 請求失敗:", err);
-                return "❌ 無法連線 AI 服務";
             }
         }
 
@@ -458,46 +398,48 @@
             setStar(5);
         });
 
-        // ========== AI 對話框事件綁定 ==========
-        document.getElementById('aiSendBtn').addEventListener('click', async () => {
-            const input = document.getElementById('aiPromptInput');
-            const prompt = input.value.trim();
-            if (!prompt) return;
+        // ========== AI 摘要相關功能 ==========
+        async function askAI(userPrompt) {
+            const res = await fetch(APPS_SCRIPT_URL, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify({ action: "askAI", prompt: userPrompt })
+            });
+            const data = await res.json();
+            return data.result || data.error || "AI 暫時沒有回應";
+        }
 
-            const chatBox = document.getElementById('aiChatBox');
-            // 顯示使用者訊息
-            chatBox.innerHTML += `<div class="text-right text-xs font-bold text-[#5D4037]">🧑 ${escapeHtml(prompt)}</div>`;
-            input.value = '';
-            chatBox.scrollTop = chatBox.scrollHeight;
-
-            // 顯示載入中
-            const loadingDiv = document.createElement('div');
-            loadingDiv.className = 'text-xs opacity-60 italic';
-            loadingDiv.textContent = '🤖 AI 思考中...';
-            chatBox.appendChild(loadingDiv);
-            chatBox.scrollTop = chatBox.scrollHeight;
-
-            // 呼叫 AI
-            const reply = await askAI(prompt);
-            // 移除載入提示
-            loadingDiv.remove();
-            // 顯示 AI 回覆
-            chatBox.innerHTML += `<div class="text-xs bg-white/80 p-2 rounded-lg border border-[#5D4037]/20">🤖 ${escapeHtml(reply)}</div>`;
-            chatBox.scrollTop = chatBox.scrollHeight;
-        });
-
-        // 支援 Enter 送出
-        document.getElementById('aiPromptInput').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                document.getElementById('aiSendBtn').click();
+        async function handleAISummary() {
+            const btn = document.getElementById('aiBtn');
+            const text = document.getElementById('aiBtnText');
+            if (!btn || !text) return;
+            btn.disabled = true;
+            text.textContent = '思考中...';
+            try {
+                const records = loadData(); // 直接讀取本機資料
+                if (records.length === 0) {
+                    alert('還沒有任何美食資料，無法摘要');
+                    return;
+                }
+                const summaryInput = records.slice(0, 30).map(r =>
+                    `[${r.foodName}] @${r.restaurantName} (${'⭐'.repeat(r.rating)}) - ${r.comment || '無評論'}`
+                ).join('\n');
+                const prompt = `你是一個熱愛校園美食的顧問。以下是校園美食大搜查中大家分享的美食紀錄。請用繁體中文，活潑熱情地總結 3-5 個重點觀察（例如最受歡迎的食物、常見的搭配、有趣的趨勢），並推薦一個你最想嘗試的單品或組合。\n\n${summaryInput}`;
+                const result = await askAI(prompt);
+                alert(result);
+            } catch (e) {
+                alert('AI 摘要失敗：' + e.message);
+            } finally {
+                btn.disabled = false;
+                text.textContent = 'AI 摘要';
             }
-        });
+        }
 
         // ========== 初始化流程：先從 Google Sheet 拉取，再啟動畫面 ==========
         async function init() {
             await fetchFromSheetAndSyncLocal();   // 嘗試從雲端取得最新資料並更新 localStorage
             setupStars();                         // 建立星星元件
-            renderList();                         // 渲染畫面
+            renderList();                         // 渲染畫面 (此時會讀取已更新的 localStorage)
         }
 
         init();
