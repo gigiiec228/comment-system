@@ -52,7 +52,7 @@
           <i data-lucide="sparkles" class="w-4 h-4"></i>
           <span id="aiBtnText">AI 摘要</span>
         </button>
-        <!-- 更改為「我要分享」取代「我要吐槽」 -->
+        <!-- 「我要分享」按鈕 -->
         <button onclick="openModal()" class="bento-button px-5 py-2 flex items-center gap-2">
           <i data-lucide="plus-circle" class="w-5 h-5"></i>
           我要分享
@@ -74,7 +74,7 @@
       <!-- 動態產生卡片 -->
     </main>
 
-    <!-- Modal 分享表單（原「吐槽」改為「分享美食」） -->
+    <!-- Modal 分享表單 -->
     <div id="reviewModal" class="modal">
       <div class="modal-content">
         <span class="close" onclick="closeModal()">&times;</span>
@@ -92,6 +92,10 @@
               <option value="甜點">甜點</option>
               <option value="其他" selected>其他</option>
             </select>
+          </div>
+          <div>
+            <label class="text-sm font-bold block">評分 (1-5)</label>
+            <input type="number" id="foodRating" min="1" max="5" value="5" class="w-full p-3 border-2 border-[#5D4037] rounded-xl outline-none">
           </div>
           <div>
             <label class="text-sm font-bold block">心得</label>
@@ -112,21 +116,41 @@
     const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzuP1LQ-DhkoKyfHuB7WOuYrRQDG77APsa9yFghXurU9PGCcD7dV4U0Kbge0BGag8Y/exec";
     let currentFilter = '全部';
 
-    // ==================== 欄位正規化 ====================
+    // ==================== 輔助：本地分類儲存（因後端未存 category，暫存於 localStorage） ====================
+    function getCategories() {
+      const data = localStorage.getItem("categories");
+      return data ? JSON.parse(data) : {};
+    }
+    function saveCategory(id, cat) {
+      const cats = getCategories();
+      cats[id] = cat;
+      localStorage.setItem("categories", JSON.stringify(cats));
+    }
+
+    // ==================== 欄位正規化（相容新舊欄位） ====================
     function normalizeRecord(record) {
+      // 優先使用新版欄位 foodName, restaurantName, rating, comment
+      // 若無則 fallback 到舊版 content, category, likes
+      const cats = getCategories();
       return {
         id: record.id || record.ID || "",
         createdAt: record.createdAt || record.CreatedAt || "",
-        content: record.content || record.Content || "",
-        category: record.category || record.Category || "其他",
+        // 新欄位
+        foodName: record.foodName || record.FoodName || record.content || record.Content || "",
+        restaurantName: record.restaurantName || record.RestaurantName || record.category || record.Category || "",
+        rating: Number(record.rating !== undefined ? record.rating : (record.Rating || 0)),
+        comment: record.comment || record.Comment || "",
+        // likes 僅存在前端，後端無此欄位，從本地記錄或設為 0
         likes: Number(record.likes !== undefined ? record.likes : (record.Likes || 0)),
-        status: record.status || record.Status || "active"
+        status: record.status || record.Status || "active",
+        // 分類：優先取 record.category，否則取本地儲存的分類
+        category: record.category || record.Category || cats[record.id || record.ID] || "其他"
       };
     }
 
     // ==================== 從 Sheet 取得資料（GET） ====================
     async function fetchRecordsFromSheet() {
-      if (APPS_SCRIPT_URL.includes("PASTE")) return null;
+      if (APPS_SCRIPT_URL.includes("https://script.google.com/macros/s/AKfycbyOztS-0IzrjYKtuTSkWCGQ69yn2RMsTK8Bmru3nKrjOcuPbMN3z5F8G_96FtSmMfZJ/exec")) return null;
       try {
         const res = await fetch(APPS_SCRIPT_URL);
         const data = await res.json();
@@ -139,7 +163,7 @@
 
     // ==================== 同步至 Sheet (POST) ====================
     async function syncToSheet(payload) {
-      if (APPS_SCRIPT_URL.includes("https://script.google.com/macros/s/AKfycbyOztS-0IzrjYKtuTSkWCGQ69yn2RMsTK8Bmru3nKrjOcuPbMN3z5F8G_96FtSmMfZJ/exec")) return;
+      if (APPS_SCRIPT_URL.includes("PASTE")) return;
       try {
         await fetch(APPS_SCRIPT_URL, {
           method: "POST",
@@ -165,9 +189,23 @@
     // ==================== 儲存新記錄 ====================
     async function saveData(newRecord) {
       const records = await loadData();
+      // 儲存分類到本地
+      if (newRecord.category) saveCategory(newRecord.id, newRecord.category);
       records.push(newRecord);
       localStorage.setItem("records", JSON.stringify(records));
-      syncToSheet({ action: "create", record: newRecord });
+      // 同步至 Sheet（注意：只傳送後端認識的欄位）
+      syncToSheet({
+        action: "create",
+        record: {
+          id: newRecord.id,
+          createdAt: newRecord.createdAt,
+          foodName: newRecord.foodName,
+          restaurantName: newRecord.restaurantName,
+          rating: newRecord.rating,
+          comment: newRecord.comment,
+          status: newRecord.status
+        }
+      });
       await renderList(records);
     }
 
@@ -193,19 +231,25 @@
       lucide.createIcons();
     }
 
-    // ==================== 建立卡片 HTML ====================
+    // ==================== 建立卡片 HTML（新版，展示美食資訊） ====================
     function createCard(record) {
-      const escapedContent = escapeHtml(record.content || '無內容');
-      const escapedCategory = escapeHtml(record.category || '其他');
+      const escapedFood = escapeHtml(record.foodName || '無名稱');
+      const escapedRestaurant = escapeHtml(record.restaurantName || '未知地點');
+      const rating = record.rating || 0;
+      const comment = escapeHtml(record.comment || '無評論');
       const likes = record.likes || 0;
+      const stars = '⭐'.repeat(Math.min(rating, 5));
       return `
         <div class="bento-card flex flex-col justify-between ${record.status === 'done' ? 'status-done' : ''}">
           <div>
             <div class="flex justify-between items-start mb-2">
-              <span class="bg-bento-yellow text-xs font-bold px-2 py-0.5 rounded-full border border-[#5D4037]">${escapedCategory}</span>
+              <span class="bg-bento-yellow text-xs font-bold px-2 py-0.5 rounded-full border border-[#5D4037]">${escapeHtml(record.category || '其他')}</span>
               <span class="text-[10px] opacity-50">${new Date(record.createdAt).toLocaleDateString()}</span>
             </div>
-            <p class="font-black text-lg leading-tight line-clamp-2 mb-2">${escapedContent}</p>
+            <h3 class="font-black text-lg leading-tight line-clamp-1">${escapedFood}</h3>
+            <p class="text-xs opacity-70">${escapedRestaurant}</p>
+            <div class="flex items-center gap-1 my-1 text-yellow-500 text-sm">${stars || '尚無評分'}</div>
+            <p class="text-sm text-gray-600 italic line-clamp-2">“${comment}”</p>
           </div>
           <div class="flex justify-between items-center mt-3">
             <button onclick="handleLike('${record.id}')" class="flex items-center gap-1 text-sm font-bold hover:text-red-500 transition">
@@ -221,13 +265,14 @@
       `;
     }
 
-    // ==================== Like 功能 ====================
+    // ==================== Like 功能（僅前端，後端無 likes 欄位） ====================
     async function handleLike(id) {
       const records = await loadData();
       const index = records.findIndex(r => r.id === id);
       if (index !== -1) {
         records[index].likes = (records[index].likes || 0) + 1;
         localStorage.setItem("records", JSON.stringify(records));
+        // 嘗試同步 likes，後端若無此欄位會忽略
         syncToSheet({ action: "update", id: id, changes: { likes: records[index].likes } });
         await renderList(records);
       }
@@ -258,7 +303,7 @@
       setFilter(category);
     }
 
-    // ==================== AI 摘要功能（含優化 Prompt） ====================
+    // ==================== AI 摘要功能 ====================
     async function askAI(userPrompt) {
       const res = await fetch(APPS_SCRIPT_URL, {
         method: "POST",
@@ -279,9 +324,8 @@
         const records = await loadData();
         if (records.length === 0) { alert('未有食物資料可以摘要'); return; }
         const summaryInput = records.slice(0, 30).map(r =>
-          `[${r.category}] ${r.content}`
+          `[${r.category || '其他'}] ${r.foodName} @${r.restaurantName} (評分:${r.rating})`
         ).join('\n');
-        // 優化後的 prompt：更具體、更活潑
         const prompt = `你是一個親切的校園美食顧問。以下是校園美食大搜查中大家分享的美食紀錄。請根據這些資料，用繁體中文總結 3-5 個重點觀察（例如最熱門的類別、常見搭配、季節趨勢等），然後推薦一個你最想嘗試的組合或單品。語氣要活潑熱情，就像跟朋友分享美食心得一樣。\n\n${summaryInput}`;
         const result = await askAI(prompt);
         alert(result);
@@ -303,11 +347,13 @@
       const newRecord = {
         id: Date.now() + "_" + Math.random().toString(36).slice(2, 6),
         createdAt: new Date().toISOString(),
-        content: document.getElementById('foodName').value,
+        foodName: document.getElementById('foodName').value,
+        restaurantName: "", // 目前表單中無餐廳欄位，可自行擴充；此處留空
+        rating: parseInt(document.getElementById('foodRating').value) || 5,
+        comment: document.getElementById('foodComment').value,
         category: document.getElementById('foodCategory').value,
         likes: 0,
-        status: "active",
-        comment: document.getElementById('foodComment').value
+        status: "active"
       };
       await saveData(newRecord);
       this.reset();
